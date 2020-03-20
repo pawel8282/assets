@@ -1,8 +1,10 @@
 const eztz = require('eztz-lib')
 
 import {
-    Ethereum, Binance, Cosmos, Tezos, Tron, IoTeX, Waves, Classic, POA, TomoChain, GoChain, Wanchain, ThunderCore,
+    Binance, Cosmos, Tezos, Tron, IoTeX, Waves,
+    ethSidechains,
     chainsFolderPath,
+    pricingFolderPath,
     getChainLogoPath,
     getChainAssetsPath,
     getChainAssetLogoPath,
@@ -17,33 +19,24 @@ import {
     getBinanceBEP2Symbols,
     isTRC10, isTRC20,
     isLogoOK,
+    getChainWhitelistPath,
+    getChainBlacklistPath,
+    mapList,
+    findFiles,
+    isValidJSON,
+    isValidatorHasAllKeys,
+    getChainAssetPath,
+    rootDirAllowedFiles,
+    assetFolderAllowedFiles
 } from "./helpers"
-
+import { ValidatorModel } from "./models";
+import { getHandle } from "../../script/gen_info";
 enum TickerType {
     Token = "token",
     Coin = "coin"
 }
 
 describe("Check repository root dir", () => {
-    const rootDirAllowedFiles = [
-        ".github",
-        "blockchains",
-        "dapps",
-        "media",
-        "node_modules",
-        "script",
-        "src",
-        ".gitignore",
-        ".travis.yml",
-        "jest.config.js",
-        "LICENSE",
-        "package-lock.json",
-        "package.json",
-        "README.md",
-        ".git",
-        "pricing"
-    ]
-
     const dirActualFiles = readDirSync(".")
     test("Root should contains only predefined files", () => {
         dirActualFiles.forEach(file => {
@@ -70,15 +63,36 @@ describe(`Test "blockchains" folder`, () => {
         })
     })
 
-    describe("Check Ethereum side-chain folders", () => {
-        const ethSidechains = [Ethereum, Classic, POA, TomoChain, GoChain, Wanchain, ThunderCore]
+    describe(`Asset folder should contain only predifind list of filees`, () => {
+        readDirSync(chainsFolderPath).forEach(chain => {
+            const assetsPath = getChainAssetsPath(chain)
 
+            if (isPathExistsSync(assetsPath)) {
+                test(`Test asset folder allowed files on chain: ${chain}`, () => {
+                readDirSync(assetsPath).forEach(address => {
+                    const assetFiles = getChainAssetPath(chain, address)
+                    readDirSync(assetFiles).forEach(assetFolderFile => {
+                        expect(assetFolderAllowedFiles.indexOf(assetFolderFile),`File "${assetFolderFile}" not allowed at this path`).not.toBe(-1)
+                    })
+                }) 
+            })
+            }  
+        })
+    })
+
+    describe("Check Ethereum side-chain folders", () => {
         ethSidechains.forEach(chain => {
             test(`Test chain ${chain} folder`, () => {
                 const assetsPath = getChainAssetsPath(chain)
 
                 readDirSync(assetsPath).forEach(addr => {
-                    expect(isChecksum(addr), `Address ${addr} on chain ${chain} must be in checksum`).toBe(true)
+                    const checksum: boolean = isChecksum(addr)
+                    expect(checksum, `Address ${addr} on chain ${chain} must be in checksum`).toBe(true)
+                    
+                    const lowercase: boolean = isLowerCase(addr)
+                    if (lowercase) {
+                        expect(checksum, `Lowercase address ${addr} on chain ${chain} should be in checksum`).toBe(true)
+                    }
 
                     const assetLogoPath = getChainAssetLogoPath(chain, addr)
                     expect(isPathExistsSync(assetLogoPath), `Missing file at path "${assetLogoPath}"`).toBe(true)
@@ -124,16 +138,9 @@ describe(`Test "blockchains" folder`, () => {
 
         stakingChains.forEach(chain => {
             const validatorsList = JSON.parse(readFileSync(getChainValidatorsListPath(chain)))
-
             test(`Make sure ${chain} validators list has correct structure`, () => {
-                validatorsList.forEach(val => {
-                    const keys = Object.keys(val)
-                    expect(keys.length, `Wrong keys amount`).toBeGreaterThanOrEqual(4)
-
-                    keys.forEach(key => {
-                        const type = typeof key
-                        expect(type, `Wrong key type`).toBe("string")
-                    })
+                validatorsList.forEach((val: ValidatorModel) => {
+                    expect(isValidatorHasAllKeys(val), `Come key and/or type missing for validator ${JSON.stringify(val)}`).toBe(true)
                 })
             })
 
@@ -295,4 +302,65 @@ describe("Test Coinmarketcap mapping", () => {
         })
     })
 })
-// TODO test whitelist
+
+describe("Test blacklist and whitelist", () => {
+    const assetsChains = readDirSync(chainsFolderPath).filter(chain => isPathExistsSync(getChainAssetsPath(chain)))
+
+    assetsChains.forEach(chain => {
+        const whiteList = JSON.parse(readFileSync(getChainWhitelistPath(chain)))
+        const blackList = JSON.parse(readFileSync(getChainBlacklistPath(chain)))
+
+        const whitelistMap = mapList(whiteList)
+        const blacklistMap = mapList(blackList)
+
+        test(`Whitelist should not contain assets from blacklist on ${chain} chain`, () => {
+            whiteList.forEach(a => {
+                const isWhitelistInBlacklist = blacklistMap.hasOwnProperty(a)
+                expect(isWhitelistInBlacklist, `Found whitelist asset ${a} in blacklist on chain ${chain}`).toBe(false)
+            })
+        })
+
+        test(`Blacklist should not contain assets from whitelist on ${chain} chain`, () => {
+            blackList.forEach(a => {
+                const isBlacklistInWhitelist = whitelistMap.hasOwnProperty(a)
+                expect(isBlacklistInWhitelist, `Found blacklist asset ${a} in whitelist on chain ${chain}`).toBe(false)
+            })
+        })
+    })
+})
+
+describe("Test coins info.json file", () => {
+    
+});
+
+describe("Test all JSON files to have valid content", () => {
+
+    const files = [
+        ...findFiles(chainsFolderPath, 'json'),
+        ...findFiles(pricingFolderPath, 'json')
+    ]
+
+    files.forEach(file => { 
+        expect(isValidJSON(file), `${file} path contains invalid JSON`).toBe(true)
+    });
+})
+
+describe("Test helper functions", () => {
+    test(`Test getHandle`, () => {
+        const urls = [
+            {
+                url: "https://twitter.com/aeternity",
+                expected: "aeternity"
+            },
+            {
+                url: "https://www.reddit.com/r/Aeternity",
+                expected: "Aeternity"
+            }
+        ]
+
+        urls.forEach(u => {
+            expect(getHandle(u.url), `Getting handle from url ${u}`).toBe(u.expected)
+        })
+    })
+});
+
